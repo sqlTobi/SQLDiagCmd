@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 
 using OfficeOpenXml;
+using System.Diagnostics;
 
 namespace SQLDiagRunner
 {
@@ -29,9 +30,13 @@ namespace SQLDiagRunner
             _dictWorksheet.Clear();
 
             string dateString = DateTime.Now.ToString("yyyyMMdd_hhmmss_");
+            List<SqlQuery> queries = new List<SqlQuery>();
 
-            var parser = new QueryFileParser(scriptLocation);
-            var queries = parser.Load();
+            foreach (var file in Directory.EnumerateFiles(scriptLocation, "*.sql"))
+            {
+                var parser = new QueryFileParser(file);
+                queries.AddRange(parser.Load());
+            }
 
             string outputFilepath = GetOutputFilepath(outputFolder, servername, dateString);
 
@@ -51,10 +56,15 @@ namespace SQLDiagRunner
                         {
                             connectionString = GetConnectionStringTemplate(servername, db, username, password, useTrusted);
                             ExecuteQueriesAndSaveToExcel(pck, connectionString, dbQueries, db.Trim(),
-                                                         databaseNo.ToString(CultureInfo.InvariantCulture), 
+                                                         databaseNo.ToString(CultureInfo.InvariantCulture),
                                                          autoFitColumns, queryTimeoutSeconds);
                             databaseNo++;
                         }
+                    }
+
+                    foreach (var file in Directory.EnumerateFiles(scriptLocation, "*.ps1"))
+                    {
+                        ExecutePoShAndSaveToExcel(pck, file, autoFitColumns);
                     }
 
                     pck.Save();
@@ -86,19 +96,25 @@ namespace SQLDiagRunner
             {
                 string query = GetQueryText(q, database);
                 string worksheetName = GetWorkSheetName(q.Title, worksheetPrefix);
+                string cell = "A1";
 
                 ExcelWorksheet ws = pck.Workbook.Worksheets.Add(worksheetName);
                 try
                 {
-                    ws.Cells["A1"].Value = database;
+                    if (!String.IsNullOrEmpty(database))
+                    {
+                        ws.Cells[cell].Value = database;
+                        cell = "A2";
+                    }
 
                     DataTable datatable = QueryExecutor.Execute(connectionstring, query, queryTimeoutSeconds);
+
                     if (datatable.Rows.Count > 0)
                     {
-                        ExcelRangeBase range = ws.Cells["A2"].LoadFromDataTable(datatable, true);
+                        ExcelRangeBase range = ws.Cells[cell].LoadFromDataTable(datatable, true);
 
-                        ws.Row(2).Style.Font.Bold = true;
- 
+                        ws.Row(Int16.Parse(cell.Substring(1))).Style.Font.Bold = true;
+
                         // find datetime columns and set formatting
                         int numcols = datatable.Columns.Count;
                         for (int i = 0; i < numcols; i++)
@@ -117,15 +133,59 @@ namespace SQLDiagRunner
                     }
                     else
                     {
-                        ws.Cells["A2"].Value = "None Found";
+                        ws.Cells[cell].Value = "None Found";
                     }
                 }
                 catch (Exception ex)
                 {
-                    ws.Cells["A2"].Value = ex.Message;
+                    ws.Cells[cell].Value = ex.Message;
                 }
             }
         }
+
+        private void ExecutePoShAndSaveToExcel(ExcelPackage pck, string ps1Path, bool autoFitColumns)
+        {
+            string worksheetName = String.Empty;
+            string cell = "A1";
+            
+            try
+            {
+                DataTable datatable = RunPowershellScript(ps1Path);
+                worksheetName = GetWorkSheetName(datatable.TableName, String.Empty);
+                ExcelWorksheet ws = pck.Workbook.Worksheets.Add(worksheetName);
+
+                if (datatable.Rows.Count > 0)
+                {
+                    ExcelRangeBase range = ws.Cells[cell].LoadFromDataTable(datatable, true);
+                    ws.Row(Int16.Parse(cell.Substring(1))).Style.Font.Bold = true;
+
+                    // find datetime columns and set formatting
+                    int numcols = datatable.Columns.Count;
+                    for (int i = 0; i < numcols; i++)
+                    {
+                        var column = datatable.Columns[i];
+                        if (column.DataType == typeof(DateTime))
+                        {
+                            ws.Column(i + 1).Style.Numberformat.Format = "yyyy-mm-dd hh:MM:ss";
+                        }
+                    }
+
+                    if (autoFitColumns)
+                    {
+                        range.AutoFitColumns();
+                    }
+                }
+                else
+                {
+                    ws.Cells[cell].Value = "None Found";
+                }
+            }
+            catch (Exception ex)
+            {
+                //ws.Cells[cell].Value = ex.Message;
+            }
+        }
+
 
         private string GetQueryText(SqlQuery q, string database)
         {
@@ -176,5 +236,60 @@ namespace SQLDiagRunner
             return string.Format(sqlLoginConnectionStringTemplate, servername, database, username, password);
 
         }
+
+        private static DataTable RunPowershellScript(string ps1Path)
+        {
+            DataTable dt = new DataTable();
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = @"powershell.exe";
+            startInfo.Arguments = String.Format(@"& '{0}'", ps1Path);
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            Process process = new Process();
+            process.StartInfo = startInfo;
+            process.Start();
+            process.WaitForExit();
+
+            string errors = process.StandardError.ReadToEnd();
+            if (!String.IsNullOrEmpty(errors))
+            {
+                dt.Columns.Add("ErrorMessage", typeof(string));
+                DataRow row = dt.NewRow();
+                row["ErrorMessage"] = errors;
+                dt.Rows.Add(row);
+            }
+            else
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                if (!String.IsNullOrEmpty(output))
+                {
+                    try
+                    {
+                        using (TextReader sr = new StringReader(output.Replace(System.Environment.NewLine, String.Empty)))
+                            dt.ReadXml(sr);
+                    }
+                    catch (Exception ex)
+                    {
+                        dt.Columns.Add("ErrorMessage", typeof(string));
+                        DataRow row = dt.NewRow();
+                        row["ErrorMessage"] = ex.Message;
+                        dt.Rows.Add(row);
+                    }
+                }
+                else
+                {
+                    dt.Columns.Add("ErrorMessage", typeof(string));
+                    DataRow row = dt.NewRow();
+                    row["ErrorMessage"] = "Powershell script has created no output.";
+                    dt.Rows.Add(row);
+                }
+            }
+            return dt;
+        }
     }
+
 }
+

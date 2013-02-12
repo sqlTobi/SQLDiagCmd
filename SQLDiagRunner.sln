@@ -24,10 +24,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StringExtensionsTests", "Tests\StringExtensionsTests\StringExtensionsTests.csproj", "{7DB657A2-73F2-45ED-B944-7F431B70D6B7}"
 EndProject
 Global
-	GlobalSection(SubversionScc) = preSolution
-		Svn-Managed = True
-		Manager = AnkhSVN - Subversion Support for Visual Studio
-	EndGlobalSection
 	GlobalSection(TestCaseManagementSettings) = postSolution
 		CategoryFile = SQLDiagRunner.vsmdi
 	EndGlobalSection
@@ -86,5 +82,9 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{7DB657A2-73F2-45ED-B944-7F431B70D6B7} = {252C8034-8874-4B60-9C34-E82899DF723C}
+	EndGlobalSection
+	GlobalSection(SubversionScc) = preSolution
+		Svn-Managed = True
+		Manager = AnkhSVN - Subversion Support for Visual Studio
 	EndGlobalSection
 EndGlobal
